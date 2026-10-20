@@ -374,7 +374,7 @@ async function injectContentScriptIntoExistingTabs() {
     for (const tab of tabs) {
       if (tab.id && !tab.incognito) {
         chrome.scripting.executeScript({
-          target: { tabId: tab.id },
+          target: { tabId: tab.id, allFrames: false },
           files: ['content.js']
         }).catch(() => {
           // Ignore tabs where script injection is prohibited (e.g. Chrome Web Store)
