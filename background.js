@@ -10,7 +10,8 @@ import {
   getBaseDomain,
   checkBookmarks,
   checkHistory,
-  shouldRouteToIncognito
+  shouldRouteToIncognito,
+  unwrapRedirectUrl
 } from './lib/matcher.js';
 
 export const DEFAULT_SETTINGS = {
@@ -148,11 +149,12 @@ function notifyMissingIncognitoPermission() {
  */
 async function handleExternalOrNewTabNavigation(tabId, url) {
   try {
-    const decision = await evaluateUrl(url);
+    const unwrapped = unwrapRedirectUrl(url);
+    const decision = await evaluateUrl(unwrapped);
 
     if (decision.shouldRoute) {
-      console.log(`[Incognito URL Router] Routing unfamiliar link to incognito: ${url}`);
-      const openResult = await openInIncognito(url);
+      console.log(`[Incognito URL Router] Routing unfamiliar link to incognito: ${unwrapped}`);
+      const openResult = await openInIncognito(unwrapped);
 
       if (openResult.success) {
         // Remove the dummy tab created in the normal window
@@ -164,7 +166,10 @@ async function handleExternalOrNewTabNavigation(tabId, url) {
 
         // Remove visit from normal history if Chrome recorded it
         try {
-          await chrome.history.deleteUrl({ url });
+          await chrome.history.deleteUrl({ url: unwrapped });
+          if (url !== unwrapped) {
+            await chrome.history.deleteUrl({ url });
+          }
         } catch {
           // Ignore
         }
@@ -271,23 +276,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       case 'OPEN_INCOGNITO': {
-        const result = await openInIncognito(message.url);
-        sendResponse(result);
+        const unwrapped = unwrapRedirectUrl(message.url);
+        const result = await openInIncognito(unwrapped);
+        sendResponse({ ...result, url: unwrapped });
+        break;
+      }
+
+      case 'CREATE_NORMAL_TAB': {
+        const unwrapped = unwrapRedirectUrl(message.url);
+        try {
+          await chrome.tabs.create({ url: unwrapped, active: true });
+          sendResponse({ success: true, url: unwrapped });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
         break;
       }
 
       case 'CHECK_AND_ROUTE_LINK': {
         if (!currentSettings.enabled || !currentSettings.interceptInPageClicks) {
-          sendResponse({ shouldRoute: false, reason: 'disabled' });
+          sendResponse({ shouldRoute: false, handled: false, reason: 'disabled' });
           return;
         }
 
-        const decision = await evaluateUrl(message.url);
+        const unwrapped = unwrapRedirectUrl(message.url);
+        const decision = await evaluateUrl(unwrapped);
+
         if (decision.shouldRoute) {
-          const openResult = await openInIncognito(message.url);
-          sendResponse({ shouldRoute: true, openResult });
+          const openResult = await openInIncognito(unwrapped);
+          sendResponse({ shouldRoute: true, openResult, url: unwrapped });
         } else {
-          sendResponse({ shouldRoute: false, reason: decision.reason });
+          // Known destination in bookmarks or history
+          if (message.isNewTab) {
+            // Open normal tab from background to avoid Chrome's popup blocker
+            try {
+              await chrome.tabs.create({ url: unwrapped, active: true });
+              sendResponse({ shouldRoute: false, handled: true, url: unwrapped });
+            } catch (err) {
+              console.error('Failed to create tab:', err);
+              sendResponse({ shouldRoute: false, handled: false, url: unwrapped, error: err.message });
+            }
+          } else {
+            sendResponse({ shouldRoute: false, handled: false, url: unwrapped, reason: decision.reason });
+          }
         }
         break;
       }

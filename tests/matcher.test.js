@@ -8,8 +8,35 @@ import {
   isWhitelisted,
   checkBookmarks,
   checkHistory,
-  shouldRouteToIncognito
+  shouldRouteToIncognito,
+  unwrapRedirectUrl
 } from '../lib/matcher.js';
+
+test('unwrapRedirectUrl correctly unwraps Gmail, Outlook, Facebook, and generic redirect wrappers', () => {
+  // Gmail / Google wrapper
+  const gmailUrl = 'https://www.google.com/url?q=https%3A%2F%2Fnews.ycombinator.com%2Fitem%3Fid%3D123&source=gmail&ust=1600000000000000&usg=AFQjCNH12345';
+  assert.equal(unwrapRedirectUrl(gmailUrl), 'https://news.ycombinator.com/item?id=123');
+
+  // Outlook SafeLinks
+  const outlookUrl = 'https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fgithub.com%2Ftrending&data=04%7C01%7C...';
+  assert.equal(unwrapRedirectUrl(outlookUrl), 'https://github.com/trending');
+
+  // Facebook redirect
+  const fbUrl = 'https://l.facebook.com/l.php?u=https%3A%2F%2Fwikipedia.org%2Fwiki%2FOpenAI&h=AT123';
+  assert.equal(unwrapRedirectUrl(fbUrl), 'https://wikipedia.org/wiki/OpenAI');
+
+  // Generic redirect
+  const genericUrl = 'https://redirector.org/link?target=https%3A%2F%2Fexample.com%2Fpage';
+  assert.equal(unwrapRedirectUrl(genericUrl), 'https://example.com/page');
+
+  // Direct clean URL
+  const cleanUrl = 'https://github.com/alan/repo';
+  assert.equal(unwrapRedirectUrl(cleanUrl), 'https://github.com/alan/repo');
+
+  // Nested redirect
+  const nestedUrl = 'https://www.google.com/url?q=https%3A%2F%2Fnam12.safelinks.protection.outlook.com%2F%3Furl%3Dhttps%253A%252F%252Fexample.org';
+  assert.equal(unwrapRedirectUrl(nestedUrl), 'https://example.org');
+});
 
 test('getBaseDomain handles standard and multi-part TLDs', () => {
   assert.equal(getBaseDomain('example.com'), 'example.com');

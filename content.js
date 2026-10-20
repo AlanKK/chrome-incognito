@@ -1,6 +1,7 @@
 /**
  * Content Script for Incognito URL Router
  * Intercepts in-page link clicks, pre-checks URLs on hover,
+ * unwraps redirect tracking links (Gmail, Outlook, etc.),
  * and routes unvisited/unbookmarked links cleanly into Incognito.
  */
 
@@ -13,26 +14,82 @@
   const pageDomainCache = new Map();
 
   /**
+   * Unwraps tracking/redirect URLs (e.g. Gmail google.com/url?q=..., Outlook SafeLinks, etc.)
+   */
+  function unwrapUrl(urlStr) {
+    if (!urlStr || typeof urlStr !== 'string') return urlStr;
+    try {
+      const parsed = new URL(urlStr);
+      const host = parsed.hostname.toLowerCase();
+      const pathname = parsed.pathname.toLowerCase();
+      let candidate = null;
+
+      if (host.includes('google.') && pathname === '/url') {
+        candidate = parsed.searchParams.get('q') || parsed.searchParams.get('url');
+      } else if (host.includes('safelinks.protection.outlook.com')) {
+        candidate = parsed.searchParams.get('url');
+      } else if (host.includes('facebook.com') && pathname.endsWith('/l.php')) {
+        candidate = parsed.searchParams.get('u');
+      } else if (host.includes('slack-redir.net')) {
+        candidate = parsed.searchParams.get('url');
+      } else {
+        const REDIRECT_PARAMS = ['q', 'url', 'u', 'target', 'dest', 'destination', 'redirect', 'link'];
+        for (const p of REDIRECT_PARAMS) {
+          const val = parsed.searchParams.get(p);
+          if (val && (val.startsWith('http://') || val.startsWith('https://'))) {
+            candidate = val;
+            break;
+          }
+        }
+      }
+
+      if (candidate) {
+        const decoded = decodeURIComponent(candidate);
+        if (decoded.startsWith('http://') || decoded.startsWith('https://')) {
+          return unwrapUrl(decoded);
+        }
+      }
+    } catch {
+      // Ignore URL parse error
+    }
+    return urlStr;
+  }
+
+  /**
+   * Extracts the intended destination URL from an anchor, checking data-saferedirecturl and href
+   * @param {HTMLAnchorElement} anchor
+   * @returns {string|null}
+   */
+  function extractDestinationUrl(anchor) {
+    if (!anchor) return null;
+    const safeRedirect = anchor.getAttribute('data-saferedirecturl');
+    const rawHref = anchor.href;
+    const urlToTest = safeRedirect || rawHref;
+    if (!urlToTest) return null;
+
+    const unwrapped = unwrapUrl(urlToTest);
+    if (!unwrapped.startsWith('http://') && !unwrapped.startsWith('https://')) {
+      return null;
+    }
+    return unwrapped;
+  }
+
+  /**
    * Finds the nearest anchor tag with a valid web href
    * @param {Element} element
    * @returns {HTMLAnchorElement|null}
    */
   function getTargetAnchor(element) {
     if (!element || typeof element.closest !== 'function') return null;
-    const anchor = element.closest('a[href]');
+    const anchor = element.closest('a[href], a[data-saferedirecturl]');
     if (!anchor) return null;
 
-    const href = anchor.href;
-    if (!href) return null;
-
-    // Only intercept http: and https: links
-    if (!href.startsWith('http://') && !href.startsWith('https://')) {
-      return null;
-    }
+    const destination = extractDestinationUrl(anchor);
+    if (!destination) return null;
 
     // Skip hash-only or same-page anchor jumps
     try {
-      const targetUrl = new URL(href, window.location.href);
+      const targetUrl = new URL(destination, window.location.href);
       if (
         targetUrl.origin === window.location.origin &&
         targetUrl.pathname === window.location.pathname &&
@@ -124,7 +181,10 @@
     (event) => {
       const anchor = getTargetAnchor(event.target);
       if (anchor) {
-        prefetchUrlStatus(anchor.href);
+        const dest = extractDestinationUrl(anchor);
+        if (dest) {
+          prefetchUrlStatus(dest);
+        }
       }
     },
     { capture: true, passive: true }
@@ -140,7 +200,9 @@
     const anchor = getTargetAnchor(event.target);
     if (!anchor) return;
 
-    const targetHref = anchor.href;
+    const targetHref = extractDestinationUrl(anchor);
+    if (!targetHref) return;
+
     let parsedUrl;
     try {
       parsedUrl = new URL(targetHref);
@@ -173,17 +235,15 @@
         });
         return;
       }
-      // If not routing, let default browser navigation proceed
-      return;
     }
 
-    // Not in local cache: intercept to query background
+    // Intercept to query background
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
 
     chrome.runtime.sendMessage(
-      { action: 'CHECK_AND_ROUTE_LINK', url: targetHref },
+      { action: 'CHECK_AND_ROUTE_LINK', url: targetHref, isNewTab: isNewTabIntent },
       (response) => {
         if (chrome.runtime.lastError || !response) {
           // Fallback to normal navigation on error
@@ -201,7 +261,11 @@
           }
         } else {
           pageDomainCache.set(domain, false);
-          // Continue normal navigation
+          // If background worker already opened the new tab via chrome.tabs.create:
+          if (response.handled) {
+            return;
+          }
+          // Otherwise proceed with same-tab navigation
           performNavigation(targetHref, isNewTabIntent);
         }
       }
@@ -209,11 +273,18 @@
   }
 
   /**
-   * Resumes normal navigation if background determines URL is known
+   * Resumes normal navigation safely without triggering Chrome's popup blocker
    */
   function performNavigation(url, newTab) {
     if (newTab) {
-      window.open(url, '_blank');
+      // Delegate to background script which can open tabs without popup blocker restrictions
+      chrome.runtime.sendMessage({ action: 'CREATE_NORMAL_TAB', url }, (res) => {
+        if (chrome.runtime.lastError || !res?.success) {
+          try {
+            window.open(url, '_blank');
+          } catch {}
+        }
+      });
     } else {
       window.location.assign(url);
     }
