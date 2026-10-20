@@ -161,6 +161,9 @@ async function handleLinkClick(event) {
       chrome.runtime.sendMessage({ action: 'OPEN_INCOGNITO', url: targetHref }, (res) => {
         if (res && res.success) {
           showToast(`Opened in Incognito tab: ${domain}`);
+        } else if (res?.error === 'NO_INCOGNITO_ACCESS') {
+          showToast('⚠️ Enable "Allow in Incognito" in chrome://extensions');
+          performNavigation(targetHref, isNewTabIntent);
         }
       });
       return;
@@ -187,6 +190,9 @@ async function handleLinkClick(event) {
         pageDomainCache.set(domain, true);
         if (response.openResult && response.openResult.success) {
           showToast(`Opened in Incognito tab: ${domain}`);
+        } else if (response.openResult?.error === 'NO_INCOGNITO_ACCESS') {
+          showToast('⚠️ Enable "Allow in Incognito" in chrome://extensions');
+          performNavigation(targetHref, isNewTabIntent);
         }
       } else {
         pageDomainCache.set(domain, false);

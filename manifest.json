@@ -12,8 +12,8 @@
     "bookmarks",
     "history",
     "tabs",
-    "windows",
     "storage",
+    "scripting",
     "webNavigation"
   ],
   "host_permissions": [

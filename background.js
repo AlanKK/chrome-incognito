@@ -60,32 +60,31 @@ function addToCache(key, value) {
   decisionCache.set(key, value);
 }
 
+// Global tracking to prevent duplicate processing of the same tab navigation
+const handledTabs = new Set();
+
 /**
  * Checks if the extension has Incognito access granted by the user.
  * @returns {Promise<boolean>}
  */
 export async function checkIncognitoAllowed() {
-  return new Promise((resolve) => {
+  try {
     if (chrome.extension && typeof chrome.extension.isAllowedIncognitoAccess === 'function') {
-      chrome.extension.isAllowedIncognitoAccess(resolve);
-    } else {
-      resolve(false);
+      return await chrome.extension.isAllowedIncognitoAccess();
     }
-  });
+  } catch (err) {
+    console.warn('Error checking isAllowedIncognitoAccess:', err);
+  }
+  return false;
 }
 
 /**
  * Opens a URL in an Incognito window or tab.
+ * Directly attempts creation with proper try-catch error handling.
  * @param {string} url
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
 export async function openInIncognito(url) {
-  const allowed = await checkIncognitoAllowed();
-  if (!allowed) {
-    console.warn('Cannot open in incognito: "Allow in Incognito" is not enabled in chrome://extensions');
-    return { success: false, error: 'NO_INCOGNITO_ACCESS' };
-  }
-
   try {
     if (currentSettings.reuseIncognitoWindow) {
       // Look for an existing incognito window
@@ -114,7 +113,11 @@ export async function openInIncognito(url) {
     return { success: true };
   } catch (err) {
     console.error('Failed to open incognito window:', err);
-    return { success: false, error: err.message };
+    const isPermissionError = String(err).toLowerCase().includes('incognito');
+    return {
+      success: false,
+      error: isPermissionError ? 'NO_INCOGNITO_ACCESS' : (err.message || String(err))
+    };
   }
 }
 
@@ -132,31 +135,80 @@ export async function evaluateUrl(targetUrl) {
   });
 }
 
-// -------------------------------------------------------------
-// EXTERNAL DOCUMENT NAVIGATION INTERCEPTION
-// -------------------------------------------------------------
+function notifyMissingIncognitoPermission() {
+  try {
+    chrome.runtime.openOptionsPage();
+  } catch {
+    // Ignore
+  }
+}
 
 /**
- * Handles tabs created without an openerTabId (typically from external desktop apps)
+ * Processes an external document or new tab navigation request
  */
+async function handleExternalOrNewTabNavigation(tabId, url) {
+  try {
+    const decision = await evaluateUrl(url);
+
+    if (decision.shouldRoute) {
+      console.log(`[Incognito URL Router] Routing unfamiliar link to incognito: ${url}`);
+      const openResult = await openInIncognito(url);
+
+      if (openResult.success) {
+        // Remove the dummy tab created in the normal window
+        try {
+          await chrome.tabs.remove(tabId);
+        } catch {
+          // Tab might have already been closed
+        }
+
+        // Remove visit from normal history if Chrome recorded it
+        try {
+          await chrome.history.deleteUrl({ url });
+        } catch {
+          // Ignore
+        }
+      } else if (openResult.error === 'NO_INCOGNITO_ACCESS') {
+        notifyMissingIncognitoPermission();
+      }
+    }
+  } catch (err) {
+    console.error('Error handling external or new tab navigation:', err);
+  }
+}
+
+// -------------------------------------------------------------
+// EXTERNAL DOCUMENT & NEW TAB NAVIGATION INTERCEPTION
+// -------------------------------------------------------------
+
+// Catch targets created specifically for navigation (external opens, target="_blank", middle click)
+chrome.webNavigation.onCreatedNavigationTarget.addListener(async (details) => {
+  if (!currentSettings.enabled || !currentSettings.interceptExternalClicks) return;
+  if (handledTabs.has(details.tabId)) return;
+
+  if (details.url && isWebUrl(details.url)) {
+    handledTabs.add(details.tabId);
+    setTimeout(() => handledTabs.delete(details.tabId), 10000);
+    await handleExternalOrNewTabNavigation(details.tabId, details.url);
+  }
+});
+
+// Catch newly created tabs from desktop applications
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (!currentSettings.enabled || !currentSettings.interceptExternalClicks) return;
-  if (tab.incognito) return; // Already in incognito
+  if (tab.incognito) return;
+  if (handledTabs.has(tab.id)) return;
 
-  // External links have no openerTabId
   if (tab.openerTabId === undefined) {
     const candidateUrl = tab.pendingUrl || tab.url;
 
     if (candidateUrl && isWebUrl(candidateUrl)) {
-      await handleExternalNavigation(tab.id, candidateUrl);
+      handledTabs.add(tab.id);
+      setTimeout(() => handledTabs.delete(tab.id), 10000);
+      await handleExternalOrNewTabNavigation(tab.id, candidateUrl);
     } else {
-      // Store tabId to watch for its first URL in onUpdated or onBeforeNavigate
       pendingExternalTabs.set(tab.id, { timestamp: Date.now() });
-
-      // Clean up after 6 seconds to avoid leaking memory
-      setTimeout(() => {
-        pendingExternalTabs.delete(tab.id);
-      }, 6000);
+      setTimeout(() => pendingExternalTabs.delete(tab.id), 8000);
     }
   }
 });
@@ -164,59 +216,44 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!pendingExternalTabs.has(tabId)) return;
   if (!currentSettings.enabled || !currentSettings.interceptExternalClicks) return;
-  if (tab.incognito) return;
+  if (tab.incognito || handledTabs.has(tabId)) return;
 
   const candidateUrl = changeInfo.url || tab.pendingUrl || tab.url;
   if (candidateUrl && isWebUrl(candidateUrl)) {
     pendingExternalTabs.delete(tabId);
-    await handleExternalNavigation(tabId, candidateUrl);
+    handledTabs.add(tabId);
+    setTimeout(() => handledTabs.delete(tabId), 10000);
+    await handleExternalOrNewTabNavigation(tabId, candidateUrl);
   }
 });
 
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   if (details.frameId !== 0) return;
-  if (!pendingExternalTabs.has(details.tabId)) return;
   if (!currentSettings.enabled || !currentSettings.interceptExternalClicks) return;
+  if (handledTabs.has(details.tabId)) return;
 
-  if (isWebUrl(details.url)) {
+  if (pendingExternalTabs.has(details.tabId)) {
     pendingExternalTabs.delete(details.tabId);
-    await handleExternalNavigation(details.tabId, details.url);
+    if (isWebUrl(details.url)) {
+      handledTabs.add(details.tabId);
+      setTimeout(() => handledTabs.delete(details.tabId), 10000);
+      await handleExternalOrNewTabNavigation(details.tabId, details.url);
+    }
+    return;
+  }
+
+  // Check if this tab is an external link launch whose onCreated event was delayed
+  try {
+    const tab = await chrome.tabs.get(details.tabId);
+    if (tab && !tab.incognito && tab.openerTabId === undefined && isWebUrl(details.url)) {
+      handledTabs.add(details.tabId);
+      setTimeout(() => handledTabs.delete(details.tabId), 10000);
+      await handleExternalOrNewTabNavigation(details.tabId, details.url);
+    }
+  } catch {
+    // Tab might not be accessible
   }
 });
-
-/**
- * Processes an external document navigation request
- */
-async function handleExternalNavigation(tabId, url) {
-  try {
-    const decision = await evaluateUrl(url);
-
-    if (decision.shouldRoute) {
-      console.log(`[Incognito URL Router] External link routed to incognito: ${url}`);
-      
-      // 1. Open in incognito window
-      const openResult = await openInIncognito(url);
-
-      if (openResult.success) {
-        // 2. Remove the empty/dummy tab created in the normal window
-        try {
-          await chrome.tabs.remove(tabId);
-        } catch {
-          // Tab might have already been closed
-        }
-
-        // 3. Remove visit from normal history if Chrome recorded it
-        try {
-          await chrome.history.deleteUrl({ url });
-        } catch {
-          // Ignore
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error handling external navigation:', err);
-  }
-}
 
 // -------------------------------------------------------------
 // IN-PAGE CLICK INTERCEPTION & EXTENSION MESSAGING
@@ -331,8 +368,27 @@ chrome.history.onVisited.addListener(clearCache);
 // ONBOARDING & INSTALLATION
 // -------------------------------------------------------------
 
+async function injectContentScriptIntoExistingTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+    for (const tab of tabs) {
+      if (tab.id && !tab.incognito) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js']
+        }).catch(() => {
+          // Ignore tabs where script injection is prohibited (e.g. Chrome Web Store)
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Could not inject content scripts into existing tabs:', err);
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async (details) => {
   await loadSettings();
+  await injectContentScriptIntoExistingTabs();
 
   const incognitoAllowed = await checkIncognitoAllowed();
   if (!incognitoAllowed) {
@@ -341,5 +397,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
+chrome.runtime.onStartup.addListener(async () => {
+  await loadSettings();
+  await injectContentScriptIntoExistingTabs();
+});
+
 // Initial boot
 loadSettings();
+injectContentScriptIntoExistingTabs();
+
