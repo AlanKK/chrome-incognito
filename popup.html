@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Incognito URL Router</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="header">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="Logo" class="logo">
+        <div class="brand-text">
+          <h1>Incognito Router</h1>
+          <span class="subtitle">Smart Privacy Gateway</span>
+        </div>
+      </div>
+      <label class="switch" title="Enable / Disable Extension">
+        <input type="checkbox" id="master-toggle" checked>
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <!-- Incognito Warning (Shown if permission missing) -->
+    <div id="incognito-warning" class="banner warning hidden">
+      <div class="banner-icon">⚠️</div>
+      <div class="banner-content">
+        <strong>Permission Needed</strong>
+        <p>Please enable "Allow in Incognito" in Chrome for routing to work.</p>
+        <button id="btn-fix-incognito" class="btn-link">Fix Permission →</button>
+      </div>
+    </div>
+
+    <!-- Active Status Card -->
+    <div class="card status-card">
+      <div class="stat-group">
+        <div class="stat-value" id="intercept-count">0</div>
+        <div class="stat-label">Links routed to Incognito this session</div>
+      </div>
+    </div>
+
+    <!-- Mode Selector -->
+    <div class="card mode-card">
+      <label class="section-label">Matching Mode</label>
+      <div class="segmented-control">
+        <button id="mode-domain" class="seg-btn active" title="If domain is in bookmarks/history, any page on that site opens normally">
+          Domain Match
+        </button>
+        <button id="mode-exact" class="seg-btn" title="Exact full URL must be in bookmarks or history">
+          Exact URL
+        </button>
+      </div>
+      <div id="mode-description" class="mode-desc">
+        Known domains stay in normal tabs. Only new sites open in Incognito.
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions">
+      <button id="btn-whitelist-current" class="btn btn-secondary">
+        <span class="btn-icon">🛡️</span> Whitelist Current Site
+      </button>
+      <button id="btn-open-options" class="btn btn-primary">
+        <span class="btn-icon">⚙️</span> Settings & Live Tester
+      </button>
+    </div>
+
+    <footer class="footer">
+      <span id="active-status" class="status-indicator active">● Active</span>
+      <span class="version">v1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

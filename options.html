@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Incognito URL Router - Settings & Diagnostics</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="Logo" class="logo">
+        <div>
+          <h2>Incognito Router</h2>
+          <span class="version">v1.0.0</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#section-permission" class="nav-item active">Permission Setup</a>
+        <a href="#section-rules" class="nav-item">Routing Rules</a>
+        <a href="#section-whitelist" class="nav-item">Whitelist</a>
+        <a href="#section-tester" class="nav-item">Live URL Tester</a>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+      <!-- 1. Incognito Permission Section -->
+      <section id="section-permission" class="panel">
+        <div class="panel-header">
+          <h3>Chrome Incognito Permission</h3>
+          <span id="perm-badge" class="badge checking">Checking...</span>
+        </div>
+        <p class="panel-desc">
+          For any Chrome extension to open or manage Incognito tabs, Chrome requires the user to explicitly grant permission in settings.
+        </p>
+
+        <div id="perm-guide" class="instruction-box">
+          <h4>How to enable "Allow in Incognito":</h4>
+          <ol class="steps-list">
+            <li>Open a new tab and go to <code class="code-link" id="chrome-ext-link">chrome://extensions</code></li>
+            <li>Locate <strong>Incognito URL Router</strong> and click <strong>Details</strong></li>
+            <li>Scroll down and toggle <strong>"Allow in incognito"</strong> to <strong>ON</strong></li>
+          </ol>
+          <div class="perm-action-row">
+            <button id="btn-check-perm" class="btn btn-primary">Check Permission Now</button>
+            <span id="perm-status-text" class="status-text"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Routing Rules Section -->
+      <section id="section-rules" class="panel">
+        <div class="panel-header">
+          <h3>Routing Rules</h3>
+        </div>
+        <div class="form-group">
+          <label class="label-heading">Matching Mode</label>
+          <div class="radio-option">
+            <input type="radio" id="mode-radio-domain" name="matchMode" value="domain" checked>
+            <label for="mode-radio-domain">
+              <strong>Domain-level match (Recommended)</strong>
+              <span>If a website's domain (e.g. <code>nytimes.com</code> or <code>github.com</code>) is in your bookmarks or browsing history, any link on that site opens normally. Only unfamiliar domains open in Incognito.</span>
+            </label>
+          </div>
+          <div class="radio-option">
+            <input type="radio" id="mode-radio-exact" name="matchMode" value="exact">
+            <label for="mode-radio-exact">
+              <strong>Exact URL match (Strict)</strong>
+              <span>The exact full URL must already be saved in your bookmarks or history. Even on familiar sites, clicking a link to an unvisited page opens in Incognito.</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="label-heading">Window & Navigation Behavior</label>
+          <label class="checkbox-option">
+            <input type="checkbox" id="chk-reuse-window" checked>
+            <span>Reuse existing Incognito window (adds a new tab if one is open)</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" id="chk-intercept-page" checked>
+            <span>Intercept links clicked inside Chrome web pages</span>
+          </label>
+          <label class="checkbox-option">
+            <input type="checkbox" id="chk-intercept-external" checked>
+            <span>Intercept links clicked from external documents (Slack, Word, PDF, Mail)</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- 3. Whitelist Section -->
+      <section id="section-whitelist" class="panel">
+        <div class="panel-header">
+          <h3>Domain Whitelist</h3>
+        </div>
+        <p class="panel-desc">
+          Domains on the whitelist always open normally in your current window, even if they are not in your history or bookmarks.
+        </p>
+
+        <form id="whitelist-form" class="inline-form">
+          <input type="text" id="whitelist-input" placeholder="e.g. example.com or *.internal.net" required>
+          <button type="submit" class="btn btn-primary">Add Domain</button>
+        </form>
+
+        <div class="whitelist-container">
+          <div id="whitelist-empty" class="empty-state">No custom whitelisted domains yet.</div>
+          <ul id="whitelist-list" class="tag-list"></ul>
+        </div>
+      </section>
+
+      <!-- 4. Live URL Tester Section -->
+      <section id="section-tester" class="panel highlight-panel">
+        <div class="panel-header">
+          <h3>Live URL Diagnostics Tester</h3>
+        </div>
+        <p class="panel-desc">
+          Test any URL against your real Chrome Bookmarks and History to see exactly how the extension will route it.
+        </p>
+
+        <form id="tester-form" class="inline-form">
+          <input type="url" id="tester-url" placeholder="https://example.com/test-article" required>
+          <button type="submit" class="btn btn-primary">Test Route</button>
+        </form>
+
+        <div id="tester-results" class="test-results hidden">
+          <div class="test-header">
+            <h4>Diagnostic Results:</h4>
+            <span id="test-verdict" class="verdict-badge">VERDICT</span>
+          </div>
+
+          <div class="test-grid">
+            <div class="test-card">
+              <span class="test-label">Base Domain</span>
+              <strong id="res-domain">-</strong>
+            </div>
+            <div class="test-card">
+              <span class="test-label">Bookmarks Match</span>
+              <strong id="res-bookmark">-</strong>
+            </div>
+            <div class="test-card">
+              <span class="test-label">History Match</span>
+              <strong id="res-history">-</strong>
+            </div>
+            <div class="test-card">
+              <span class="test-label">Whitelist Status</span>
+              <strong id="res-whitelist">-</strong>
+            </div>
+          </div>
+          <div id="res-explanation" class="test-explanation"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

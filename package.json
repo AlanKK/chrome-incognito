@@ -1,0 +1,12 @@
+{
+  "name": "incognito-url-router",
+  "version": "1.0.0",
+  "description": "Chrome extension that opens unvisited and unbookmarked links in Incognito mode",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": ["chrome-extension", "incognito", "privacy", "router"],
+  "author": "Antigravity",
+  "license": "MIT"
+}
