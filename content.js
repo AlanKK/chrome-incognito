@@ -14,6 +14,44 @@
   const pageDomainCache = new Map();
 
   /**
+   * Checks if the extension context is still valid.
+   * When an extension is reloaded/updated in chrome://extensions, existing
+   * tabs' scripts become orphaned and chrome.runtime is invalidated.
+   */
+  function isExtensionContextValid() {
+    try {
+      return Boolean(
+        typeof chrome !== 'undefined' &&
+        chrome?.runtime?.id &&
+        typeof chrome.runtime?.sendMessage === 'function'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Safely sends a message to the background service worker, guarding against invalidated contexts
+   */
+  function safeSendMessage(message, callback) {
+    if (!isExtensionContextValid()) {
+      if (callback) callback(null);
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (chrome.runtime?.lastError) {
+          if (callback) callback(null);
+          return;
+        }
+        if (callback) callback(response);
+      });
+    } catch {
+      if (callback) callback(null);
+    }
+  }
+
+  /**
    * Unwraps tracking/redirect URLs (e.g. Gmail google.com/url?q=..., Outlook SafeLinks, etc.)
    */
   function unwrapUrl(urlStr) {
@@ -161,13 +199,14 @@
    * Pre-checks a URL with the background worker on mouseover/pointerenter
    */
   function prefetchUrlStatus(url) {
+    if (!isExtensionContextValid()) return;
     try {
       const parsed = new URL(url);
       const domain = parsed.hostname.toLowerCase();
       if (pageDomainCache.has(domain)) return;
 
-      chrome.runtime.sendMessage({ action: 'CHECK_URL', url }, (response) => {
-        if (chrome.runtime.lastError || !response) return;
+      safeSendMessage({ action: 'CHECK_URL', url }, (response) => {
+        if (!response) return;
         pageDomainCache.set(domain, response.shouldRoute);
       });
     } catch {
@@ -176,19 +215,21 @@
   }
 
   // Hover prefetch for responsive clicks
-  document.addEventListener(
-    'pointerover',
-    (event) => {
-      const anchor = getTargetAnchor(event.target);
-      if (anchor) {
-        const dest = extractDestinationUrl(anchor);
-        if (dest) {
-          prefetchUrlStatus(dest);
-        }
+  function handlePointerOver(event) {
+    if (!isExtensionContextValid()) {
+      document.removeEventListener('pointerover', handlePointerOver, true);
+      return;
+    }
+    const anchor = getTargetAnchor(event.target);
+    if (anchor) {
+      const dest = extractDestinationUrl(anchor);
+      if (dest) {
+        prefetchUrlStatus(dest);
       }
-    },
-    { capture: true, passive: true }
-  );
+    }
+  }
+
+  document.addEventListener('pointerover', handlePointerOver, { capture: true, passive: true });
 
   /**
    * Click handler intercepting navigation
@@ -196,6 +237,15 @@
   async function handleLinkClick(event) {
     // Only handle left click (0) and middle click (1)
     if (event.button !== 0 && event.button !== 1) return;
+
+    // If extension context has been invalidated (e.g. extension was reloaded in chrome://extensions):
+    // Unbind dead listeners and let normal browser navigation proceed
+    if (!isExtensionContextValid()) {
+      document.removeEventListener('click', handleLinkClick, true);
+      document.removeEventListener('auxclick', handleLinkClick, true);
+      document.removeEventListener('pointerover', handlePointerOver, true);
+      return;
+    }
 
     const anchor = getTargetAnchor(event.target);
     if (!anchor) return;
@@ -225,7 +275,7 @@
         event.stopPropagation();
         event.stopImmediatePropagation();
 
-        chrome.runtime.sendMessage({ action: 'OPEN_INCOGNITO', url: targetHref }, (res) => {
+        safeSendMessage({ action: 'OPEN_INCOGNITO', url: targetHref }, (res) => {
           if (res && res.success) {
             showToast(`Opened in Incognito tab: ${domain}`);
           } else if (res?.error === 'NO_INCOGNITO_ACCESS') {
@@ -242,10 +292,10 @@
     event.stopPropagation();
     event.stopImmediatePropagation();
 
-    chrome.runtime.sendMessage(
+    safeSendMessage(
       { action: 'CHECK_AND_ROUTE_LINK', url: targetHref, isNewTab: isNewTabIntent },
       (response) => {
-        if (chrome.runtime.lastError || !response) {
+        if (!response) {
           // Fallback to normal navigation on error
           performNavigation(targetHref, isNewTabIntent);
           return;
@@ -277,14 +327,19 @@
    */
   function performNavigation(url, newTab) {
     if (newTab) {
-      // Delegate to background script which can open tabs without popup blocker restrictions
-      chrome.runtime.sendMessage({ action: 'CREATE_NORMAL_TAB', url }, (res) => {
-        if (chrome.runtime.lastError || !res?.success) {
-          try {
-            window.open(url, '_blank');
-          } catch {}
-        }
-      });
+      if (isExtensionContextValid()) {
+        safeSendMessage({ action: 'CREATE_NORMAL_TAB', url }, (res) => {
+          if (!res?.success) {
+            try {
+              window.open(url, '_blank');
+            } catch {}
+          }
+        });
+      } else {
+        try {
+          window.open(url, '_blank');
+        } catch {}
+      }
     } else {
       window.location.assign(url);
     }
